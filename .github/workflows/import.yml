@@ -1,0 +1,53 @@
+name: Import verified bakery site
+on:
+  push:
+    branches: [import-photo-catalog-a7a5636]
+    paths: ['bundle/**']
+permissions:
+  contents: write
+  pages: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify archive and import it into main
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat bundle/site-*.part > "$RUNNER_TEMP/site.zip"
+          printf '%s  %s\n' '45076e5ac5221b6b9d7551917749eb9db0d9f4e28d625a012dc666965000aa2f' "$RUNNER_TEMP/site.zip" | sha256sum --check
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "a7a5636e1c8e2314fc760329820de486a847f679"
+          git worktree add --detach "$RUNNER_TEMP/catalog" origin/main
+          cd "$RUNNER_TEMP/catalog"
+          unzip -q "$RUNNER_TEMP/site.zip"
+          test -f index.html && test -f muka/catalog/dragon-roll.webp
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git -c core.autocrlf=false commit -m "Publish bakery website with updated catalog photography"
+          git push origin HEAD:refs/heads/main
+      - name: Enable GitHub Pages from the published files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api "repos/$GITHUB_REPOSITORY/pages" --silent; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/pages" -f 'source[branch]=main' -f 'source[path]=/' --silent
+          fi
+      - name: Verify the public catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url='https://0434155-ship-it.github.io/menabu-photo-catalog'
+          for attempt in {1..30}; do
+            if curl -fsSL "$url/" -o "$RUNNER_TEMP/live.html" && cmp "$RUNNER_TEMP/catalog/index.html" "$RUNNER_TEMP/live.html"; then break; fi
+            sleep 8
+          done
+          cmp "$RUNNER_TEMP/catalog/index.html" "$RUNNER_TEMP/live.html"
+          for file in retail-catalog.js catalog-photos.js catalog-viewer.js muka/catalog/dragon-roll.webp muka/catalog/dragon-roll-detail.webp; do
+            curl -fsSL "$url/$file" | cmp - "$RUNNER_TEMP/catalog/$file"
+          done
+          git push --force-with-lease="refs/heads/import-photo-catalog-a7a5636:$GITHUB_SHA" origin ":refs/heads/import-photo-catalog-a7a5636"
